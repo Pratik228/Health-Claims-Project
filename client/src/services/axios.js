@@ -1,7 +1,7 @@
 import axios from "axios";
 
 const instance = axios.create({
-  baseURL: "http://localhost:5008/api",
+  baseURL: "https://health-claims-project.onrender.com/api",
   timeout: 10000,
   headers: {
     "Content-Type": "application/json",
