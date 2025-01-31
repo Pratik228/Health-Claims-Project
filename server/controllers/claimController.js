@@ -226,36 +226,61 @@ async function processClaim(claimData, influencerId) {
 async function verifyClaimInternal(claim) {
   try {
     const prompt = `Analyze this health claim: "${claim}"
-    
-    Provide a JSON response with:
-    {
-      "category": "Nutrition|Medicine|Mental Health|Fitness|General Wellness",
-      "isVerified": boolean,
-      "confidenceScore": number (0-1),
-      "sources": [
-        {
-          "name": "Journal/Source name",
-          "excerpt": "Relevant excerpt supporting/contradicting claim",
-          "type": "supporting|contradicting"
-        }
-      ],
-      "summary": "Brief explanation of verification result"
-    }`;
+      
+      Provide a JSON response with:
+      {
+        "category": "Nutrition|Medicine|Mental Health|Fitness|General Wellness",
+        "isVerified": boolean,
+        "confidenceScore": number (0-1),
+        "sources": [
+          {
+            "name": "Journal/Source name",
+            "excerpt": "Relevant excerpt supporting/contradicting claim",
+            "type": "supporting|contradicting",
+            "url": "URL if available"
+          }
+        ],
+        "summary": "Brief explanation of verification result"
+      }`;
 
     const response = await perplexityClient.post("/chat/completions", {
       model: "sonar-pro",
-      messages: [
-        {
-          role: "user",
-          content: prompt,
-        },
-      ],
+      messages: [{ role: "user", content: prompt }],
       max_tokens: 1000,
     });
 
-    return JSON.parse(response.data.choices[0].message.content);
+    const result = JSON.parse(response.data.choices[0].message.content);
+
+    // Create or find journals for each source
+    const sourcesWithJournals = await Promise.all(
+      result.sources.map(async (source) => {
+        let journal = await Journal.findOne({ name: source.name });
+
+        if (!journal) {
+          journal = new Journal({
+            name: source.name,
+            trustedSource: true,
+            domain: source.url ? new URL(source.url).hostname : undefined,
+            categories: [result.category],
+            lastVerificationDate: new Date(),
+          });
+          await journal.save();
+        }
+
+        return {
+          journalId: journal._id,
+          excerpt: source.excerpt,
+          relevanceScore: source.type === "supporting" ? 1 : 0,
+        };
+      })
+    );
+
+    return {
+      ...result,
+      sources: sourcesWithJournals,
+    };
   } catch (error) {
-    console.error("Verification Error:", error.response?.data || error);
+    console.error("Verification Error:", error);
     throw new Error(`Error verifying claim: ${error.message}`);
   }
 }

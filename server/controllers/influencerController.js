@@ -10,60 +10,41 @@ const perplexity = axios.create({
 
 async function fetchInfluencerInfo(name) {
   try {
-    const prompt = `Find social media information for health influencer ${name}. 
-      Return only a JSON object in this exact format:
-      {
-        "followerCount": (total followers across platforms as number),
-        "socialHandles": [
-          {"platform": "twitter/instagram/etc", "handle": "actual handle without @"}
-        ],
-        "expertise": "their main area of health expertise"
-      }`;
+    const prompt = `Find ONLY REAL AND VERIFIED social media information for health influencer ${name}. 
+        Return only a JSON object in this exact format:
+        {
+          "followerCount": (total followers across platforms as number),
+          "socialHandles": [
+            {"platform": "twitter/instagram/etc", "handle": "actual verified handle without @"}
+          ],
+          "expertise": "their main area of health expertise"
+        }
+        If you cannot find verified social media handles, return an empty array for socialHandles.`;
 
     const response = await perplexity.post("/chat/completions", {
       model: "sonar-pro",
-      messages: [
-        {
-          role: "user",
-          content: prompt,
-        },
-      ],
+      messages: [{ role: "user", content: prompt }],
       max_tokens: 1000,
     });
 
-    const content = response.data.choices[0].message.content;
-    console.log("Raw influencer info:", content);
+    const parsedInfo = JSON.parse(response.data.choices[0].message.content);
 
-    const parsedInfo = JSON.parse(content);
-
-    const normalizeFollowerCount = (count) => {
-      if (!count || isNaN(count)) {
-        return 100000;
-      }
-
-      if (count > 500_000_000) {
-        return 500_000_000;
-      }
-
-      if (count < 1000) {
-        return 1000;
-      }
-
-      return Math.round(count);
-    };
-
-    parsedInfo.followerCount = normalizeFollowerCount(parsedInfo.followerCount);
-
-    console.log("Normalized influencer info:", parsedInfo);
-    return parsedInfo;
-  } catch (error) {
-    console.error("Error fetching influencer info:", error);
+    // Validate social handles
+    parsedInfo.socialHandles = parsedInfo.socialHandles.filter((handle) => {
+      return handle.handle && handle.handle.length > 0 && handle.platform;
+    });
 
     return {
+      ...parsedInfo,
+      followerCount: normalizeFollowerCount(parsedInfo.followerCount),
+      socialHandles:
+        parsedInfo.socialHandles.length > 0 ? parsedInfo.socialHandles : [],
+    };
+  } catch (error) {
+    console.error("Error fetching influencer info:", error);
+    return {
       followerCount: 100000,
-      socialHandles: [
-        { platform: "twitter", handle: name.toLowerCase().replace(/\s+/g, "") },
-      ],
+      socialHandles: [],
       expertise: "Health and Wellness",
     };
   }
