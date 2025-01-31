@@ -8,7 +8,6 @@ import axios from "../services/axios";
 import StatsCard from "../components/common/StatsCard";
 import TrustScoreChart from "../components/charts/TrustScoreChart";
 import Leaderboard from "../components/dashboard/Leaderboard";
-import ResearchConfig from "../components/dashboard/ResearchConfig";
 
 function Dashboard() {
   const [dashboardStats, setDashboardStats] = useState({
@@ -122,10 +121,6 @@ function Dashboard() {
           icon={<ChartBarIcon className="w-6 h-6 text-emerald-500" />}
           trend={dashboardStats.trustScoreTrend}
         />
-      </div>
-
-      <div className="mb-8 bg-gray-800 rounded-lg p-6">
-        <ResearchConfig />
       </div>
 
       <div className="mb-8 bg-gray-800 rounded-lg p-6">
