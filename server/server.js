@@ -9,9 +9,10 @@ const PORT = process.env.PORT || 5008;
 // Basic middleware
 app.use(
   cors({
-    origin: "https://health-claims-project-e1at.vercel.app/",
+    origin: "https://health-claims-project-e1at.vercel.app",
     methods: ["GET", "POST", "PUT", "DELETE", "PATCH"],
     allowedHeaders: ["Content-Type", "Authorization"],
+    credentials: true,
   })
 );
 
