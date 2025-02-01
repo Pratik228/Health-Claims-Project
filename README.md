@@ -52,6 +52,19 @@ cd client && npm run dev
 - `/api/claims`: Claim analysis and verification
 - `/api/journals`: Scientific journal references
 
+## For Testings
+
+- Dr. Mehmet Oz
+- Dr. Andrew Huberman
+- Dr. Peter Attia
+- Dr. Rhonda Patrick
+- Dr. Mark Hyman
+- Dr. David Sinclair
+- Dr. Michael Greger
+- Dr. Paul Saladino
+- Dr. William Davis
+- Dr. Steven Gundry
+
 ## Future Enhancements
 
 - Real-time content monitoring
