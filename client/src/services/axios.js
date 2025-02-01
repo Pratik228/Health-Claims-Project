@@ -1,5 +1,6 @@
 import axios from "axios";
 
+//In development: "http://localhost:5008/api"
 const instance = axios.create({
   baseURL: "https://health-claims-project.onrender.com/api",
   timeout: 10000,

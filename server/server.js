@@ -7,6 +7,8 @@ const app = express();
 const PORT = process.env.PORT || 5008;
 
 // Basic middleware
+
+//In Development: "http://localhost:5173"
 app.use(
   cors({
     origin: "https://health-claims-project-e1at.vercel.app",
@@ -22,8 +24,6 @@ app.use(express.urlencoded({ extended: true, limit: "10mb" }));
 // Routes
 app.use("/api/influencers", require("./routes/influencerRoutes"));
 app.use("/api/claims", require("./routes/claimRoutes"));
-app.use("/api/journals", require("./routes/journalRoutes"));
-app.use("/api/config", require("./routes/configRoutes"));
 
 // MongoDB connection
 mongoose

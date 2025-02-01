@@ -65,14 +65,20 @@ function InfluencerTable({ influencers }) {
               </td>
               <td className="py-4 px-6">
                 <div className="flex flex-wrap gap-2">
-                  {influencer.expertise?.split(",").map((category) => (
-                    <span
-                      key={category}
-                      className="px-2 py-1 text-xs rounded-full bg-gray-700 text-gray-300"
-                    >
-                      {category.trim()}
+                  {Array.isArray(influencer.expertise) ? (
+                    influencer.expertise.map((exp, i) => (
+                      <span
+                        key={i}
+                        className="px-2 py-1 text-xs rounded-full bg-gray-700 text-gray-300"
+                      >
+                        {exp}
+                      </span>
+                    ))
+                  ) : (
+                    <span className="px-2 py-1 text-xs rounded-full bg-gray-700 text-gray-300">
+                      {influencer.mainFocus || "Health & Wellness"}
                     </span>
-                  ))}
+                  )}
                 </div>
               </td>
               <td className="py-4 px-6 text-right">

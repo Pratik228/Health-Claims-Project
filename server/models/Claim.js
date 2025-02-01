@@ -5,15 +5,23 @@ const claimSchema = new mongoose.Schema({
   category: { type: String, required: true },
   verificationStatus: {
     type: String,
-    enum: ["verified", "debunked", "pending", "processing"],
+    enum: ["verified", "debunked", "pending", "processing", "inconclusive"],
     default: "pending",
   },
   confidenceScore: { type: Number, default: 0 },
   linkedJournals: [
     {
-      journalId: { type: mongoose.Schema.Types.ObjectId, ref: "Journal" },
-      relevanceScore: Number,
+      journalId: { type: mongoose.Schema.Types.ObjectId },
       excerpt: String,
+      title: String,
+      authors: [String],
+      year: String,
+      url: String,
+      type: {
+        type: String,
+        enum: ["supporting", "contradicting", "neutral", "inconclusive"],
+      },
+      evidenceStrength: Number,
     },
   ],
   influencerId: {
@@ -29,5 +37,7 @@ const claimSchema = new mongoose.Schema({
   },
   dateIdentified: { type: Date, default: Date.now },
 });
+
+claimSchema.index({ text: "text" });
 
 module.exports = mongoose.model("Claim", claimSchema);

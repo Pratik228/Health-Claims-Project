@@ -1,4 +1,5 @@
 import axios from "axios";
+//In development: "http://localhost:5008/api"
 const API_URL = "https://health-claims-project.onrender.com/api";
 const api = axios.create({
   baseURL: API_URL,

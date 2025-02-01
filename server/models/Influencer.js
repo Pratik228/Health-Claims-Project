@@ -9,6 +9,9 @@ const influencerSchema = new mongoose.Schema({
       handle: String,
     },
   ],
+  expertise: [String],
+  credentials: String,
+  mainFocus: String,
   trustScore: { type: Number, default: 0 },
   totalClaimsAnalyzed: { type: Number, default: 0 },
   claimsByCategory: {

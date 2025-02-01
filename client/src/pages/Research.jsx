@@ -107,9 +107,7 @@ function Research() {
         } catch (searchError) {
           if (searchError.response?.status === 404) {
             const createResponse = await api.influencers.create({
-              name: influencerName,
-              trustScore: 0,
-              totalClaimsAnalyzed: 0,
+              name: influencerName
             });
             influencerId = createResponse.data._id;
           } else {

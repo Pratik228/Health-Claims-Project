@@ -3,8 +3,8 @@ import { useEffect, useState, useCallback } from "react";
 import axios from "../../../services/axios";
 import CategoryFilters from "./CategoryFilters";
 import InfluencerTable from "./InfluencerTable";
-
-//Pass
+import SearchBar from "./SearchBar";
+import debounce from "lodash.debounce";
 
 function Leaderboard({ onSelectInfluencer }) {
   const [state, setState] = useState({
@@ -14,6 +14,10 @@ function Leaderboard({ onSelectInfluencer }) {
     loading: true,
     error: null,
     categoryStats: {},
+    searchTerm: "",
+    searchResults: [],
+    showSearchResults: false,
+    searchError: null,
   });
 
   const fetchData = useCallback(async () => {
@@ -104,9 +108,69 @@ function Leaderboard({ onSelectInfluencer }) {
     }));
   }, []);
 
+  const handleSearch = useCallback(
+    debounce(async (searchValue) => {
+      // Changed to take searchValue instead of event
+      setState((prev) => ({ ...prev, searchTerm: searchValue }));
+
+      if (searchValue.trim().length < 2) {
+        setState((prev) => ({
+          ...prev,
+          searchResults: [],
+          showSearchResults: false,
+        }));
+        return;
+      }
+
+      try {
+        const response = await axios.get(
+          `/influencers/search?name=${encodeURIComponent(searchValue)}`
+        );
+        const results = Array.isArray(response.data)
+          ? response.data
+          : [response.data];
+
+        setState((prev) => ({
+          ...prev,
+          searchResults: results,
+          showSearchResults: true,
+          searchError: null,
+        }));
+      } catch (error) {
+        console.error("Search error:", error);
+        setState((prev) => ({
+          ...prev,
+          searchResults: [],
+          showSearchResults: false,
+          searchError: "Failed to search influencers",
+        }));
+      }
+    }, 300),
+    []
+  );
+
+  // Add a new handler for the onChange event
+  const handleSearchInputChange = (event) => {
+    const value = event.target.value;
+    setState((prev) => ({ ...prev, searchTerm: value }));
+    handleSearch(value);
+  };
+
   useEffect(() => {
     fetchData();
   }, [fetchData]);
+
+  useEffect(() => {
+    const handleClickOutside = (event) => {
+      if (!event.target.closest(".search-container")) {
+        // Improved click outside handler
+        setState((prev) => ({ ...prev, showSearchResults: false }));
+      }
+    };
+
+    document.addEventListener("click", handleClickOutside);
+    return () => document.removeEventListener("click", handleClickOutside);
+  }, []);
 
   if (state.loading) {
     return (
@@ -134,7 +198,18 @@ function Leaderboard({ onSelectInfluencer }) {
 
   return (
     <div className="bg-gray-800 rounded-lg p-6">
-      <div className="mb-6">
+      <div className="mb-6 space-y-4">
+        <div className="search-container">
+          {" "}
+          {/* Added search-container class */}
+          <SearchBar
+            searchTerm={state.searchTerm}
+            onSearchChange={handleSearchInputChange} // Pass the new handler
+            searchResults={state.searchResults}
+            showSearchResults={state.showSearchResults}
+            error={state.searchError}
+          />
+        </div>
         <CategoryFilters
           categories={state.categories}
           selectedCategories={state.selectedCategories}

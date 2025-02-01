@@ -1,3 +1,4 @@
+const mongoose = require("mongoose");
 const OpenAI = require("openai");
 const axios = require("axios");
 const Claim = require("../models/Claim");
@@ -35,162 +36,214 @@ function initializeAPIClients(openaiKey, perplexityKey) {
 initializeAPIClients();
 
 const processInfluencerContent = async (req, res) => {
-  const {
-    influencerId,
-    name,
-    timeRange = "30d",
-    settings = {},
-    selectedJournals = [],
-    notes = "",
-  } = req.body;
+  const { influencerId, name, timeRange = "30d" } = req.body;
 
   try {
-    if (!influencerId) {
+    if (!influencerId || !name) {
       return res.status(400).json({
-        message: "influencerId is required",
+        message: "Both influencerId and name are required",
       });
     }
 
     const influencer = await Influencer.findById(influencerId);
     if (!influencer) {
-      return res.status(404).json({
-        message: "Influencer not found",
-      });
+      return res.status(404).json({ message: "Influencer not found" });
     }
-    influencer.activeAnalysis = true;
-    await influencer.save();
 
-    try {
-      const content = await fetchInfluencerContent(name, timeRange);
-      const extractedClaims = await extractClaims(content);
-      const processedClaims = await Promise.allSettled(
-        extractedClaims.map((claim) => processClaim(claim, influencerId))
+    console.log(`Starting content analysis for ${name}...`);
+    const content = await fetchInfluencerContent(name, timeRange);
+    console.log(`Content fetched, extracting claims...`);
+
+    const extractedClaims = await extractClaims(content);
+    console.log(`Found ${extractedClaims.length} claims to process`);
+
+    const processedClaims = await Promise.all(
+      extractedClaims.map((claim) =>
+        processClaim(claim, influencerId).catch((error) => {
+          console.error(`Failed to process claim: ${claim.claim}`, error);
+          return null;
+        })
+      )
+    );
+
+    const successfulClaims = processedClaims.filter(Boolean);
+    const verifiedClaims = successfulClaims.filter(
+      (claim) => claim.verificationStatus === "verified"
+    );
+
+    // Calculate detailed trust score
+    const calculateDetailedTrustScore = (claims) => {
+      if (!claims.length) return 0;
+
+      return (
+        claims.reduce((total, claim) => {
+          let score = 0;
+
+          // Base verification status (40% weight)
+          if (claim.verificationStatus === "verified") {
+            score += 0.4;
+          }
+
+          // Confidence score (30% weight)
+          score += (claim.confidenceScore || 0) * 0.3;
+
+          // Source quality (30% weight)
+          if (claim.linkedJournals?.length) {
+            const journalScore =
+              claim.linkedJournals.reduce((sum, journal) => {
+                let sourceScore = 0;
+                // Give higher weight to journals with better evidence
+                if (journal.url) sourceScore += 0.1;
+                if (journal.authors?.length) sourceScore += 0.1;
+                if (journal.type === "supporting") sourceScore += 0.1;
+                return sum + sourceScore;
+              }, 0) / claim.linkedJournals.length;
+
+            score += journalScore;
+          }
+
+          return total + score;
+        }, 0) / claims.length
       );
+    };
 
-      const successfulClaims = processedClaims
-        .filter((result) => result.status === "fulfilled")
-        .map((result) => result.value);
+    const newTrustScore = calculateDetailedTrustScore(successfulClaims);
 
-      const verifiedClaims = successfulClaims.filter(
-        (claim) => claim.verificationStatus === "verified"
-      );
+    // Update influencer stats
+    await Influencer.findByIdAndUpdate(influencerId, {
+      trustScore: newTrustScore,
+      totalClaimsAnalyzed: successfulClaims.length,
+      lastAnalyzed: new Date(),
+    });
 
-      influencer.trustScore =
-        verifiedClaims.length / Math.max(successfulClaims.length, 1);
-      influencer.totalClaimsAnalyzed = successfulClaims.length;
-      influencer.activeAnalysis = false;
-      influencer.lastAnalyzed = new Date();
-
-      await influencer.save();
-
-      res.json({
-        influencer,
-        claims: successfulClaims,
-        summary: {
-          totalClaims: successfulClaims.length,
-          verifiedClaims: verifiedClaims.length,
-          failedClaims: processedClaims.filter(
-            (result) => result.status === "rejected"
-          ).length,
-        },
-      });
-    } catch (error) {
-      influencer.activeAnalysis = false;
-      await influencer.save();
-      throw error;
-    }
+    res.json({
+      trustScore: newTrustScore,
+      claims: successfulClaims,
+      summary: {
+        totalClaims: successfulClaims.length,
+        verifiedClaims: verifiedClaims.length,
+        failedClaims: extractedClaims.length - successfulClaims.length,
+      },
+    });
   } catch (error) {
     console.error("Error processing influencer:", error);
     res.status(500).json({
+      message: "Failed to process influencer content",
       error: error.message,
-      details: "Error processing influencer content. Please try again.",
     });
   }
 };
 
 async function fetchInfluencerContent(name, timeRange) {
-  const prompt = `Find recent health-related content by ${name} from the past ${timeRange}. Focus on specific health claims, findings, and recommendations they've made. Include direct quotes when available.`;
+  const prompt = `Analyze health-related content by ${name} from the past ${timeRange}.
+    Focus on:
+    1. Scientific claims and statements
+    2. Health recommendations and advice
+    3. Medical or nutritional assertions
+    4. Research references or study citations
+    5. Treatment suggestions or protocols
+  
+    For each claim found:
+    - Include the exact quote or statement
+    - Provide full context including date and platform
+    - Note any referenced studies, papers, or experts
+    - Include URLs or sources when available
+  
+    Only return verified content that can be fact-checked.`;
 
   try {
     const response = await perplexityClient.post("/chat/completions", {
       model: "sonar-pro",
-      messages: [
-        {
-          role: "user",
-          content: prompt,
-        },
-      ],
+      messages: [{ role: "user", content: prompt }],
       max_tokens: 2000,
     });
 
-    console.log("Perplexity Response:", JSON.stringify(response.data, null, 2));
-
-    if (!response.data.choices?.[0]?.message?.content) {
-      throw new Error("Unexpected response structure from Perplexity");
+    if (!response.data?.choices?.[0]?.message?.content) {
+      throw new Error("Invalid response from Perplexity API");
     }
 
     return response.data.choices[0].message.content;
   } catch (error) {
-    console.error("Perplexity API Error:", error.response?.data || error);
     throw new Error(`Error fetching content: ${error.message}`);
   }
 }
 
 async function extractClaims(content) {
-  try {
-    console.log("Content to analyze:", content);
+  const systemPrompt = `You are a scientific fact-checker specializing in health claims analysis.
+    Extract verifiable health claims from the content and format them as JSON.
+    For each claim:
+    1. Isolate the specific scientific assertion
+    2. Include full context and source
+    3. Identify any referenced studies or evidence
+    4. Note the claim's specificity and measurability
+  
+    Return in this exact format:
+    {
+      "claims": [
+        {
+          "claim": "The precise health claim statement",
+          "context": "Full context including source, date, and platform",
+          "evidence": "Any cited studies, papers, or expert references",
+          "urls": ["Array of relevant URLs if available"],
+          "type": "medical|nutrition|fitness|mental_health|general"
+        }
+      ]
+    }`;
 
+  try {
     const response = await openaiClient.chat.completions.create({
       model: "gpt-4",
       messages: [
-        {
-          role: "system",
-          content: `You are an expert at identifying health claims. Extract specific health claims from the given content. 
-          Return a JSON string containing an array of objects with this exact format:
-          {
-            "claims": [
-              {
-                "claim": "The specific health claim statement",
-                "context": "The surrounding context or source"
-              }
-            ]
-          }`,
-        },
-        {
-          role: "user",
-          content: content,
-        },
+        { role: "system", content: systemPrompt },
+        { role: "user", content },
       ],
-      temperature: 0.7,
+      temperature: 0.3,
     });
 
-    console.log(
-      "OpenAI Response:",
-      JSON.stringify(response.choices[0].message.content, null, 2)
-    );
-
     const parsedResponse = JSON.parse(response.choices[0].message.content);
-
-    if (!parsedResponse.claims || !Array.isArray(parsedResponse.claims)) {
-      console.error("Unexpected response structure:", parsedResponse);
-      throw new Error("Invalid response structure from OpenAI");
+    if (!parsedResponse.claims?.length) {
+      throw new Error("No valid claims extracted");
     }
 
     return parsedResponse.claims;
   } catch (error) {
-    console.error("Error in extractClaims:", error);
-    if (error.response) {
-      console.error("OpenAI API Error:", error.response.data);
-    }
     throw new Error(`Error extracting claims: ${error.message}`);
   }
 }
 
+function calculateTrustScore(claims) {
+  if (!claims.length) return 0;
+
+  const weights = {
+    verified: 1,
+    hasEvidence: 0.3,
+    hasUrls: 0.2,
+  };
+
+  return (
+    claims.reduce((score, claim) => {
+      let claimScore = 0;
+      if (claim.verificationStatus === "verified")
+        claimScore += weights.verified;
+      if (claim.evidence) claimScore += weights.hasEvidence;
+      if (claim.urls?.length > 0) claimScore += weights.hasUrls;
+      return score + claimScore;
+    }, 0) / claims.length
+  );
+}
+
 async function processClaim(claimData, influencerId) {
   try {
+    // Use regex instead of $text search
     const existingClaim = await Claim.findOne({
       influencerId,
-      text: { $regex: new RegExp(claimData.claim, "i") },
+      text: {
+        $regex: `^${claimData.claim.replace(
+          /[-\/\\^$*+?.()|[\]{}]/g,
+          "\\$&"
+        )}$`,
+        $options: "i",
+      },
     });
 
     if (existingClaim) {
@@ -204,105 +257,191 @@ async function processClaim(claimData, influencerId) {
       category: verification.category,
       influencerId,
       sourceContent: claimData.context,
-      verificationStatus: verification.isVerified ? "verified" : "debunked",
-      confidenceScore: verification.confidenceScore,
-      linkedJournals: verification.sources,
+      verificationStatus: verification.status || "pending",
+      confidenceScore: verification.confidenceScore || 0,
+      linkedJournals: verification.sources || [],
       dateIdentified: new Date(),
     });
 
-    await claim.save();
-    return claim;
+    const savedClaim = await claim.save();
+    console.log(`Successfully processed claim: ${savedClaim._id}`);
+    return savedClaim;
   } catch (error) {
     console.error("Error processing claim:", error);
-    return {
-      text: claimData.claim,
-      error: error.message,
-      verificationStatus: "error",
-      confidenceScore: 0,
-    };
+    throw error; // Let the caller handle the error
   }
 }
 
 async function verifyClaimInternal(claim) {
   try {
     const prompt = `Analyze this health claim: "${claim}"
-      
-      Provide a JSON response with:
-      {
+    Find specific, real research papers and scientific sources.
+    Return a JSON response with:
+        {
         "category": "Nutrition|Medicine|Mental Health|Fitness|General Wellness",
-        "isVerified": boolean,
+        "status": "verified|debunked",  // Changed from verified|debunked|inconclusive
         "confidenceScore": number (0-1),
         "sources": [
-          {
-            "name": "Journal/Source name",
-            "excerpt": "Relevant excerpt supporting/contradicting claim",
-            "type": "supporting|contradicting",
-            "url": "URL if available"
-          }
+            {
+            "name": "Specific journal name",
+            "title": "Exact paper title",
+            "authors": ["Full author names"],
+            "year": "Publication year",
+            "doi": "DOI if available",
+            "pubmedId": "PubMed ID if available",
+            "url": "Direct link to paper",
+            "excerpt": "Direct quote from paper supporting analysis",
+            "type": "supporting|contradicting"
+            }
         ],
-        "summary": "Brief explanation of verification result"
-      }`;
+        "summary": "Detailed explanation with scientific evidence"
+        }
+        Only use verified, peer-reviewed sources. If insufficient evidence exists, mark as 'debunked'.`;
 
     const response = await perplexityClient.post("/chat/completions", {
       model: "sonar-pro",
-      messages: [{ role: "user", content: prompt }],
+      messages: [
+        {
+          role: "system",
+          content:
+            "You are a JSON-only response bot. Only return valid JSON objects, no other text.",
+        },
+        { role: "user", content: prompt },
+      ],
       max_tokens: 1000,
+      temperature: 0.3,
     });
 
-    const result = JSON.parse(response.data.choices[0].message.content);
+    const content = response.data.choices[0].message.content.trim();
+    console.log("Raw verification response:", content);
 
-    // Create or find journals for each source
-    const sourcesWithJournals = await Promise.all(
-      result.sources.map(async (source) => {
-        let journal = await Journal.findOne({ name: source.name });
+    const jsonMatch = content.match(/\{[\s\S]*\}/);
+    if (!jsonMatch) {
+      throw new Error("No valid JSON found in response");
+    }
 
-        if (!journal) {
-          journal = new Journal({
-            name: source.name,
-            trustedSource: true,
-            domain: source.url ? new URL(source.url).hostname : undefined,
-            categories: [result.category],
-            lastVerificationDate: new Date(),
-          });
-          await journal.save();
+    const result = JSON.parse(jsonMatch[0]);
+
+    // Validate required fields
+    if (
+      !result.category ||
+      !result.status ||
+      !result.confidenceScore ||
+      !Array.isArray(result.sources)
+    ) {
+      throw new Error("Invalid response format - missing required fields");
+    }
+
+    // Process and validate sources with additional fields
+    const processedSources = result.sources
+      .map((source) => {
+        if (!source.name || !source.excerpt || !source.type) {
+          return null;
+        }
+
+        // Construct URL from available identifiers
+        let url = source.url;
+        if (!url && source.doi) {
+          url = `https://doi.org/${source.doi}`;
+        } else if (!url && source.pubmedId) {
+          url = `https://pubmed.ncbi.nlm.nih.gov/${source.pubmedId}`;
         }
 
         return {
-          journalId: journal._id,
+          journalId: new mongoose.Types.ObjectId(),
+          name: source.name,
+          title: source.title || "",
+          authors: source.authors || [],
+          year: source.year || "",
+          url: url || "",
           excerpt: source.excerpt,
-          relevanceScore: source.type === "supporting" ? 1 : 0,
+          type: source.type,
+          evidenceStrength: calculateEvidenceStrength(source),
         };
       })
-    );
+      .filter(Boolean);
 
     return {
-      ...result,
-      sources: sourcesWithJournals,
+      category: result.category,
+      status: result.status,
+      confidenceScore: result.confidenceScore,
+      sources: processedSources,
+      summary: result.summary,
     };
   } catch (error) {
-    console.error("Verification Error:", error);
-    throw new Error(`Error verifying claim: ${error.message}`);
+    console.error("Raw verification error:", error);
+    if (error instanceof SyntaxError) {
+      throw new Error("Failed to parse verification response");
+    }
+    throw new Error(`Verification failed: ${error.message}`);
   }
+}
+
+// Helper function to calculate evidence strength
+function calculateEvidenceStrength(source) {
+  let score = 0;
+  if (source.doi) score += 0.4;
+  if (source.pubmedId) score += 0.3;
+  if (source.url) score += 0.2;
+  if (source.authors?.length > 0) score += 0.1;
+  return Math.min(score, 1);
+}
+
+async function findOrCreateJournal(source) {
+  const existingJournal = await Journal.findOne({
+    $or: [{ name: source.name }, { aliases: source.name }],
+  });
+
+  if (existingJournal) {
+    return existingJournal;
+  }
+
+  const journal = new Journal({
+    name: source.name,
+    trustedSource: await validateJournalSource(source),
+    domain: source.url ? new URL(source.url).hostname : undefined,
+    categories: [],
+    impactFactor: await fetchJournalImpactFactor(source),
+    lastVerificationDate: new Date(),
+  });
+
+  await journal.save();
+  return journal;
 }
 
 const verifyClaimHandler = async (req, res) => {
   try {
-    const claim = await Claim.findById(req.params.claimId);
-    if (!claim) return res.status(404).json({ message: "Claim not found" });
+    const claim = await Claim.findById(req.params.claimId).populate(
+      "linkedJournals.journalId"
+    );
 
-    const verificationResult = await verifyClaimInternal(claim.text);
+    if (!claim) {
+      return res.status(404).json({ message: "Claim not found" });
+    }
 
-    claim.verificationStatus = verificationResult.isVerified
-      ? "verified"
-      : "debunked";
-    claim.confidenceScore = verificationResult.confidenceScore;
-    claim.linkedJournals = verificationResult.sources;
+    const verificationResult = await verifyClaimInternal({
+      claim: claim.text,
+      context: claim.sourceContent,
+      evidence: claim.evidence,
+    });
 
-    await claim.save();
-    res.json(claim);
-  } catch (err) {
-    console.error("Verification Handler Error:", err);
-    res.status(500).json({ message: err.message });
+    const updatedClaim = await Claim.findByIdAndUpdate(
+      claim._id,
+      {
+        verificationStatus: verificationResult.status,
+        confidenceScore: verificationResult.confidenceScore,
+        linkedJournals: verificationResult.sources,
+        "aiProcessingMetadata.lastProcessed": new Date(),
+      },
+      { new: true }
+    ).populate("linkedJournals.journalId");
+
+    res.json(updatedClaim);
+  } catch (error) {
+    res.status(500).json({
+      message: "Verification failed",
+      error: error.message,
+    });
   }
 };
 
